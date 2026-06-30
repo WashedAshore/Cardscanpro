@@ -42,11 +42,16 @@ export const users = pgTable("users", {
   password: text("password").notNull(),
   email: text("email"),
   isAdmin: boolean("is_admin").default(false),
-  tier: text("tier").notNull().default("free"), // free | pro | elite | enterprise
+  tier: text("tier").notNull().default("free"), // free | pro | elite | dealer
+  trialTier: text("trial_tier"), // dealer | null — active 24h preview tier
+  trialEndsAt: text("trial_ends_at"), // ISO timestamp; tier reverts to paid plan after this
+  signupIp: text("signup_ip"), // for abuse prevention on the 24h trial
   tierExpiresAt: text("tier_expires_at"), // ISO date, null = no expiry (free or lifetime)
   totalScans: integer("total_scans").notNull().default(0),
   monthlyScans: integer("monthly_scans").notNull().default(0),
   monthlyScansResetAt: text("monthly_scans_reset_at"),
+  stripeCustomerId: text("stripe_customer_id"), // linked Stripe Customer
+  stripeSubscriptionId: text("stripe_subscription_id"), // active Stripe Subscription
   createdAt: text("created_at").notNull(),
 });
 
@@ -82,9 +87,13 @@ export type Folder = typeof folders.$inferSelect;
 export const subscriptions = pgTable("subscriptions", {
   id: serial("id").primaryKey(),
   userId: integer("user_id").notNull(),
-  tier: text("tier").notNull(), // pro | elite | enterprise
+  tier: text("tier").notNull(), // pro | elite | dealer
   btcTxId: text("btc_tx_id"), // bitcoin transaction hash
   btcAmount: text("btc_amount"), // BTC amount sent
+  paymentMethod: text("payment_method").default("bitcoin"), // bitcoin | stripe
+  stripeSessionId: text("stripe_session_id"), // Stripe Checkout Session ID
+  stripeSubscriptionId: text("stripe_subscription_id"), // Stripe Subscription ID
+  stripeCustomerId: text("stripe_customer_id"), // Stripe Customer ID
   usdAmount: text("usd_amount"), // USD equivalent
   promoCodeUsed: text("promo_code_used"),
   status: text("status").notNull().default("pending"), // pending | confirmed | expired | cancelled
@@ -107,7 +116,7 @@ export const promoCodes = pgTable("promo_codes", {
   description: text("description"), // admin note about purpose
   discountType: text("discount_type").notNull(), // percentage | fixed | free_tier | free_trial
   discountValue: integer("discount_value").notNull(), // percentage (0-100) or cents off or days free
-  applicableTiers: text("applicable_tiers").notNull().default("pro,elite,enterprise"), // comma-sep
+  applicableTiers: text("applicable_tiers").notNull().default("pro,elite,dealer"), // comma-sep
   maxUses: integer("max_uses"), // null = unlimited
   currentUses: integer("current_uses").notNull().default(0),
   grantsTier: text("grants_tier"), // if free_tier type, which tier to grant
@@ -145,82 +154,76 @@ export const TIERS = {
   free: {
     name: "Free",
     price: 0,
-    monthlyScans: 10,
+    monthlyScans: 5,
     maxHistory: 25,
     folders: 0,
     features: [
-      "10 AI scans per month",
+      "5 AI scans per month",
       "Full valuation engine",
-      "Grading recommendations",
+      "Grade-or-Sell Verdict (basic — outcome only)",
       "Selling platform advice",
       "25 history entries",
     ],
     limitations: [
       "No folders / collections",
       "No bulk export",
-      "No priority AI model",
+      "No verdict math or probabilities",
     ],
   },
   pro: {
     name: "Pro",
-    price: 4.99,
+    price: 7.99,
     monthlyScans: 100,
     maxHistory: 500,
     folders: 10,
     features: [
       "100 AI scans per month",
       "Full valuation engine",
-      "Grading recommendations",
-      "Selling platform advice",
+      "Grade-or-Sell Verdict (full math + probabilities)",
+      "Sell timing windows",
       "500 history entries",
       "10 custom folders",
       "CSV export",
       "Priority support",
     ],
     limitations: [
-      "No unlimited folders",
-      "No API access",
+      "No bulk Arbitrage Scanner",
+      "No PSA Submission Prep",
     ],
   },
   elite: {
     name: "Elite",
-    price: 12.99,
+    price: 17.99,
     monthlyScans: 500,
     maxHistory: 5000,
     folders: 50,
     features: [
       "500 AI scans per month",
-      "Full valuation engine",
-      "Grading recommendations",
-      "Selling platform advice",
+      "Everything in Pro",
+      "Bulk Arbitrage Scanner (rank lots by grade ROI)",
       "5,000 history entries",
       "50 custom folders",
       "CSV + PDF export",
-      "Bulk scan mode",
-      "Priority AI model",
       "Market trend alerts",
+      "Priority AI model",
     ],
     limitations: [
-      "No unlimited scans",
+      "No PSA Submission Prep",
+      "No API access",
     ],
   },
-  enterprise: {
-    name: "Enterprise",
-    price: 29.99,
+  dealer: {
+    name: "Dealer",
+    price: 39.99,
     monthlyScans: -1, // unlimited
     maxHistory: -1, // unlimited
     folders: -1, // unlimited
     features: [
       "Unlimited AI scans",
-      "Full valuation engine",
-      "Grading recommendations",
-      "Selling platform advice",
-      "Unlimited history",
-      "Unlimited folders",
+      "Everything in Elite",
+      "PSA / BGS / SGC Submission Prep CSV",
+      "Unlimited history & folders",
       "CSV + PDF + JSON export",
-      "Bulk scan mode",
-      "Priority AI model",
-      "Market trend alerts",
       "API access",
       "White-label reports",
       "Dedicated support",
@@ -233,3 +236,15 @@ export type TierKey = keyof typeof TIERS;
 
 // BTC wallet for payments
 export const BTC_WALLET = "3JmWA5vVpByAx9V6zCFWdLNv5Q1yfueAw1";
+
+// Stripe Price ID lookup keys (configured via env vars in production)
+// Server reads STRIPE_PRICE_PRO, STRIPE_PRICE_ELITE, STRIPE_PRICE_ENTERPRISE
+export const STRIPE_TIER_LOOKUP: Record<Exclude<TierKey, "free">, string> = {
+  pro: "cardscan_pro_monthly",
+  elite: "cardscan_elite_monthly",
+  dealer: "cardscan_dealer_monthly",
+};
+
+// 24-hour Dealer-tier free preview on signup to any paid plan.
+export const TRIAL_PREVIEW_HOURS = 24;
+export const TRIAL_PREVIEW_TIER: TierKey = "dealer";

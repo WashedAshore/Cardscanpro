@@ -50,12 +50,23 @@ export async function ensureSchema() {
       email TEXT,
       is_admin BOOLEAN DEFAULT FALSE,
       tier TEXT NOT NULL DEFAULT 'free',
+      trial_tier TEXT,
+      trial_ends_at TEXT,
+      signup_ip TEXT,
       tier_expires_at TEXT,
       total_scans INTEGER NOT NULL DEFAULT 0,
       monthly_scans INTEGER NOT NULL DEFAULT 0,
       monthly_scans_reset_at TEXT,
+      stripe_customer_id TEXT,
+      stripe_subscription_id TEXT,
       created_at TEXT NOT NULL
     );
+    -- Idempotent column adds for upgrades from earlier schema versions
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_tier TEXT;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_ends_at TEXT;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS signup_ip TEXT;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS stripe_customer_id TEXT;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS stripe_subscription_id TEXT;
 
     CREATE TABLE IF NOT EXISTS analyses (
       id SERIAL PRIMARY KEY,
@@ -99,6 +110,10 @@ export async function ensureSchema() {
       tier TEXT NOT NULL,
       btc_tx_id TEXT,
       btc_amount TEXT,
+      payment_method TEXT DEFAULT 'bitcoin',
+      stripe_session_id TEXT,
+      stripe_subscription_id TEXT,
+      stripe_customer_id TEXT,
       usd_amount TEXT,
       promo_code_used TEXT,
       status TEXT NOT NULL DEFAULT 'pending',
@@ -106,6 +121,29 @@ export async function ensureSchema() {
       expires_at TEXT NOT NULL,
       created_at TEXT NOT NULL
     );
+    ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS payment_method TEXT DEFAULT 'bitcoin';
+    ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS stripe_session_id TEXT;
+    ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS stripe_subscription_id TEXT;
+    ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS stripe_customer_id TEXT;
+
+    -- Verdict cache: persist Grade-or-Sell Verdict results per analysis
+    CREATE TABLE IF NOT EXISTS verdicts (
+      id SERIAL PRIMARY KEY,
+      analysis_id INTEGER NOT NULL,
+      user_id INTEGER,
+      decision TEXT NOT NULL,            -- GRADE | SELL_RAW | HOLD
+      confidence INTEGER NOT NULL,        -- 0..100
+      raw_fmv INTEGER NOT NULL,           -- cents
+      grade_cost_cents INTEGER NOT NULL,
+      probabilities JSONB NOT NULL,       -- {"psa10":0.18,"psa9":0.52,"psa8":0.30}
+      predicted_grade_values JSONB NOT NULL, -- {"psa10":89000,...}
+      expected_post_grade_value_cents INTEGER NOT NULL,
+      expected_roi_cents INTEGER NOT NULL,
+      sell_window TEXT,                   -- e.g. "Apr-Jul 2027"
+      reasoning TEXT,                     -- AI-written explanation
+      created_at TEXT NOT NULL
+    );
+    ALTER TABLE verdicts ADD COLUMN IF NOT EXISTS sell_window TEXT;
 
     CREATE TABLE IF NOT EXISTS promo_codes (
       id SERIAL PRIMARY KEY,
@@ -113,7 +151,7 @@ export async function ensureSchema() {
       description TEXT,
       discount_type TEXT NOT NULL,
       discount_value INTEGER NOT NULL,
-      applicable_tiers TEXT NOT NULL DEFAULT 'pro,elite,enterprise',
+      applicable_tiers TEXT NOT NULL DEFAULT 'pro,elite,dealer',
       max_uses INTEGER,
       current_uses INTEGER NOT NULL DEFAULT 0,
       grants_tier TEXT,
@@ -168,6 +206,15 @@ export interface IStorage {
   getUserSubscriptions(userId: number): Promise<Subscription[]>;
   getActiveSubscription(userId: number): Promise<Subscription | undefined>;
   updateSubscription(id: number, data: Partial<Subscription>): Promise<Subscription | undefined>;
+  markStripeSessionConfirmed(
+    sessionId: string,
+    data: { stripeSubscriptionId: string | null; status: string; expiresAt: string },
+  ): Promise<Subscription | undefined>;
+
+  // Stripe helpers
+  findUserByEmail(email: string, excludeUserId?: number): Promise<User | undefined>;
+  findUserBySignupIp(ip: string, excludeUserId?: number): Promise<User | undefined>;
+  findUserByStripeCustomer(customerId: string): Promise<User | undefined>;
 
   // Promo Codes
   createPromoCode(promo: InsertPromoCode): Promise<PromoCode>;
@@ -310,6 +357,40 @@ export class DatabaseStorage implements IStorage {
 
   async updateSubscription(id: number, data: Partial<Subscription>): Promise<Subscription | undefined> {
     return first(await db.update(subscriptions).set(data).where(eq(subscriptions.id, id)).returning());
+  }
+
+  async markStripeSessionConfirmed(
+    sessionId: string,
+    data: { stripeSubscriptionId: string | null; status: string; expiresAt: string },
+  ): Promise<Subscription | undefined> {
+    return first(
+      await db
+        .update(subscriptions)
+        .set({
+          status: data.status,
+          expiresAt: data.expiresAt,
+          stripeSubscriptionId: data.stripeSubscriptionId,
+        })
+        .where(eq(subscriptions.stripeSessionId, sessionId))
+        .returning(),
+    );
+  }
+
+  // ===== Stripe helpers =====
+  async findUserByEmail(email: string, excludeUserId?: number): Promise<User | undefined> {
+    const result = await db.select().from(users).where(eq(users.email, email));
+    return result.find((u) => u.id !== excludeUserId);
+  }
+
+  async findUserBySignupIp(ip: string, excludeUserId?: number): Promise<User | undefined> {
+    const result = await db.select().from(users).where(eq(users.signupIp, ip));
+    return result.find((u) => u.id !== excludeUserId);
+  }
+
+  async findUserByStripeCustomer(customerId: string): Promise<User | undefined> {
+    return first(
+      await db.select().from(users).where(eq(users.stripeCustomerId, customerId)),
+    );
   }
 
   // ===== PROMO CODES =====

@@ -53,7 +53,7 @@ interface AdminSession {
 }
 
 type PromoType = "percentage" | "fixed" | "free_tier" | "free_trial";
-type TierKey = "pro" | "elite" | "enterprise";
+type TierKey = "pro" | "elite" | "dealer";
 
 const PROMO_TYPES: { value: PromoType; label: string }[] = [
   { value: "percentage", label: "Percentage (%)" },
@@ -62,7 +62,7 @@ const PROMO_TYPES: { value: PromoType; label: string }[] = [
   { value: "free_trial", label: "Free Trial (days)" },
 ];
 
-const PAID_TIERS: TierKey[] = ["pro", "elite", "enterprise"];
+const PAID_TIERS: TierKey[] = ["pro", "elite", "dealer"];
 
 // ─── Promo Codes Tab ─────────────────────────────────────────────────────────
 
@@ -79,7 +79,7 @@ function PromoCodesTab() {
   const [description, setDescription] = useState("");
   const [discountType, setDiscountType] = useState<PromoType>("percentage");
   const [discountValue, setDiscountValue] = useState("");
-  const [applicableTiers, setApplicableTiers] = useState<TierKey[]>(["pro", "elite", "enterprise"]);
+  const [applicableTiers, setApplicableTiers] = useState<TierKey[]>(["pro", "elite", "dealer"]);
   const [maxUses, setMaxUses] = useState("");
   const [grantsTier, setGrantsTier] = useState<TierKey | "">("");
   const [grantsDays, setGrantsDays] = useState("");
@@ -470,7 +470,7 @@ function UsersTab() {
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          {["free", "pro", "elite", "enterprise"].map((t) => (
+                          {["free", "pro", "elite", "dealer"].map((t) => (
                             <SelectItem key={t} value={t} className="text-xs capitalize">{t}</SelectItem>
                           ))}
                         </SelectContent>

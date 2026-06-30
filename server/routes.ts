@@ -4,7 +4,15 @@ import { storage } from "./storage";
 import multer from "multer";
 import Anthropic from "@anthropic-ai/sdk";
 import bcrypt from "bcryptjs";
-import { TIERS, BTC_WALLET, type TierKey } from "@shared/schema";
+import { TIERS, BTC_WALLET, TRIAL_PREVIEW_HOURS, TRIAL_PREVIEW_TIER, type TierKey } from "@shared/schema";
+import { generateVerdict, gateVerdict } from "./verdict";
+import {
+  stripeEnabled,
+  createCheckoutSession,
+  handleWebhook,
+  startTrialPreview,
+  effectiveTier,
+} from "./stripeCheckout";
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -505,7 +513,7 @@ export async function registerRoutes(
       
       const currentCount = await storage.getUserFolderCount(userId);
       if (tierConfig.folders !== -1 && currentCount >= tierConfig.folders) {
-        return res.status(403).json({ error: `Folder limit reached (${tierConfig.folders}). Upgrade for more.`, requiredTier: tierKey === "pro" ? "elite" : "enterprise" });
+        return res.status(403).json({ error: `Folder limit reached (${tierConfig.folders}). Upgrade for more.`, requiredTier: tierKey === "pro" ? "elite" : "dealer" });
       }
       
       const now = new Date().toISOString();
@@ -599,7 +607,7 @@ export async function registerRoutes(
       
       const hashed = await bcrypt.hash(password, 10);
       const user = await storage.createUser({ username, password: hashed, email: email || null });
-      await storage.updateUser(user.id, { isAdmin: true, tier: "enterprise", tierExpiresAt: null });
+      await storage.updateUser(user.id, { isAdmin: true, tier: "dealer", tierExpiresAt: null });
       
       const updated = await storage.getUser(user.id);
       const { password: _, ...safeUser } = updated!;
@@ -630,7 +638,7 @@ export async function registerRoutes(
         description: description || null,
         discountType,
         discountValue: Number(discountValue),
-        applicableTiers: applicableTiers || "pro,elite,enterprise",
+        applicableTiers: applicableTiers || "pro,elite,dealer",
         maxUses: maxUses ? Number(maxUses) : null,
         currentUses: 0,
         grantsTier: grantsTier || null,
@@ -741,7 +749,7 @@ export async function registerRoutes(
       const limit = tierConfig.monthlyScans;
       
       if (limit !== -1 && user.monthlyScans >= limit) {
-        return res.status(403).json({ error: "Monthly scan limit reached", limit, used: user.monthlyScans, requiredTier: tierKey === "free" ? "pro" : tierKey === "pro" ? "elite" : "enterprise" });
+        return res.status(403).json({ error: "Monthly scan limit reached", limit, used: user.monthlyScans, requiredTier: tierKey === "free" ? "pro" : tierKey === "pro" ? "elite" : "dealer" });
       }
       
       await storage.updateUser(userId, {
@@ -751,6 +759,190 @@ export async function registerRoutes(
       });
       
       res.json({ ok: true, scansUsed: (user.monthlyScans || 0) + 1, limit });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+
+  // ============================================================
+  // GRADE-OR-SELL VERDICT — CardScan Pro's moat feature
+  // ============================================================
+  app.post("/api/verdict/:analysisId", async (req, res) => {
+    try {
+      const analysisId = parseInt(req.params.analysisId, 10);
+      const userId = req.body.userId ? parseInt(req.body.userId, 10) : undefined;
+      const analysis = await storage.getAnalysis(analysisId);
+      if (!analysis) return res.status(404).json({ error: "Analysis not found" });
+      let tier: TierKey = "free";
+      if (userId) {
+        const u = await storage.getUser(userId);
+        if (u) tier = effectiveTier(u);
+      }
+      const verdict = await generateVerdict(analysis);
+      res.json({ verdict: gateVerdict(verdict, tier), tier });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message ?? "Failed to generate verdict" });
+    }
+  });
+
+  // ============================================================
+  // STRIPE CHECKOUT + WEBHOOK + 24h TRIAL PREVIEW
+  // ============================================================
+  app.get("/api/stripe/status", (_req, res) => {
+    res.json({ enabled: stripeEnabled() });
+  });
+
+  app.post("/api/stripe/checkout", async (req, res) => {
+    try {
+      if (!stripeEnabled()) {
+        return res.status(503).json({ error: "Stripe is not configured on this server. Set STRIPE_SECRET_KEY." });
+      }
+      const { userId, tier, promoCode, successUrl, cancelUrl } = req.body as {
+        userId: number;
+        tier: Exclude<TierKey, "free">;
+        promoCode?: string;
+        successUrl?: string;
+        cancelUrl?: string;
+      };
+      if (!userId || !tier) return res.status(400).json({ error: "userId and tier required" });
+      if ((tier as any) === "free") return res.status(400).json({ error: "Cannot subscribe to free tier" });
+      if (!TIERS[tier]) return res.status(400).json({ error: "Invalid tier" });
+      const user = await storage.getUser(userId);
+      if (!user) return res.status(404).json({ error: "User not found" });
+      const origin = (req.headers.origin as string) || `http://${req.headers.host}`;
+      const session = await createCheckoutSession({
+        user,
+        tier,
+        successUrl: successUrl || `${origin}/?stripe=success`,
+        cancelUrl: cancelUrl || `${origin}/pricing?stripe=cancel`,
+        promoCode,
+        clientIp: req.ip,
+      });
+      const refreshedUser = await storage.getUser(userId);
+      const trial = refreshedUser
+        ? await startTrialPreview({ user: refreshedUser, clientIp: req.ip })
+        : { granted: false };
+      res.json({ url: session.url, sessionId: session.sessionId, trial });
+    } catch (error: any) {
+      console.error("Stripe checkout failed:", error);
+      res.status(500).json({ error: error.message ?? "Stripe checkout failed" });
+    }
+  });
+
+  app.post("/api/stripe/webhook", async (req, res) => {
+    try {
+      const result = await handleWebhook(req);
+      res.json(result);
+    } catch (error: any) {
+      console.error("Stripe webhook error:", error.message);
+      res.status(400).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/trial/status/:userId", async (req, res) => {
+    const userId = parseInt(req.params.userId, 10);
+    const user = await storage.getUser(userId);
+    if (!user) return res.status(404).json({ error: "User not found" });
+    const tier = effectiveTier(user);
+    const hasActiveTrial =
+      !!user.trialTier && !!user.trialEndsAt && new Date(user.trialEndsAt).getTime() > Date.now();
+    res.json({
+      tier,
+      paidTier: user.tier,
+      trialTier: user.trialTier,
+      trialEndsAt: user.trialEndsAt,
+      hasActiveTrial,
+      trialPreviewHours: TRIAL_PREVIEW_HOURS,
+      trialPreviewTier: TRIAL_PREVIEW_TIER,
+    });
+  });
+
+  // ============================================================
+  // BULK ARBITRAGE SCANNER (Elite+)
+  // ============================================================
+  app.post("/api/arbitrage/rank", async (req, res) => {
+    try {
+      const { userId, analysisIds } = req.body as { userId: number; analysisIds: number[] };
+      if (!userId) return res.status(400).json({ error: "userId required" });
+      if (!Array.isArray(analysisIds) || analysisIds.length === 0) {
+        return res.status(400).json({ error: "analysisIds[] required" });
+      }
+      const user = await storage.getUser(userId);
+      if (!user) return res.status(404).json({ error: "User not found" });
+      const tier = effectiveTier(user);
+      if (tier !== "elite" && tier !== "dealer") {
+        return res.status(403).json({ error: "Bulk Arbitrage Scanner requires Elite or Dealer tier", requiredTier: "elite" });
+      }
+      const results: any[] = [];
+      for (const id of analysisIds.slice(0, 500)) {
+        const a = await storage.getAnalysis(id);
+        if (!a) continue;
+        const v = await generateVerdict(a);
+        results.push({
+          analysisId: id,
+          playerName: a.playerName,
+          setName: a.setName,
+          year: a.year,
+          decision: v.decision,
+          confidence: v.confidence,
+          rawFmvCents: v.rawFmv,
+          expectedRoiCents: v.expectedRoiCents,
+          recommended: v.decision === "GRADE" && v.expectedRoiCents > 0,
+        });
+      }
+      results.sort((a, b) => b.expectedRoiCents - a.expectedRoiCents);
+      res.json({
+        count: results.length,
+        recommendedCount: results.filter((r) => r.recommended).length,
+        results,
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // ============================================================
+  // PSA / BGS / SGC SUBMISSION PREP CSV (Dealer)
+  // ============================================================
+  app.post("/api/submission/prep", async (req, res) => {
+    try {
+      const { userId, analysisIds, service } = req.body as {
+        userId: number;
+        analysisIds: number[];
+        service?: "psa" | "bgs" | "sgc";
+      };
+      if (!userId) return res.status(400).json({ error: "userId required" });
+      const user = await storage.getUser(userId);
+      if (!user) return res.status(404).json({ error: "User not found" });
+      const tier = effectiveTier(user);
+      if (tier !== "dealer") {
+        return res.status(403).json({ error: "PSA Submission Prep requires Dealer tier", requiredTier: "dealer" });
+      }
+      const svc = (service ?? "psa").toUpperCase();
+      const rows: string[] = [];
+      rows.push(["Service", "Year", "Brand/Set", "Player", "CardNumber", "DeclaredValue", "Notes"].join(","));
+      for (const id of analysisIds.slice(0, 1000)) {
+        const a = await storage.getAnalysis(id);
+        if (!a) continue;
+        rows.push(
+          [
+            svc,
+            csvSafe(a.year ?? ""),
+            csvSafe(`${a.brandTier} / ${a.setName ?? ""}`),
+            csvSafe(a.playerName),
+            csvSafe(a.serialNumber ?? ""),
+            String(a.estimatedFmv),
+            csvSafe(`Rookie:${a.isRookie ? "Y" : "N"} Auto:${a.autoType}`),
+          ].join(","),
+        );
+      }
+      res.setHeader("Content-Type", "text/csv");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="submission-${svc.toLowerCase()}-${Date.now()}.csv"`,
+      );
+      res.send(rows.join("\n"));
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
@@ -1599,4 +1791,12 @@ function formatCurrencyServer(value: number): string {
   if (value >= 1000000) return `$${(value / 1000000).toFixed(2)}M`;
   if (value >= 1000) return `$${value.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
   return `$${value.toFixed(2)}`;
+}
+
+function csvSafe(s: string): string {
+  if (!s) return "";
+  if (s.includes(",") || s.includes("\"") || s.includes("\n")) {
+    return `"${s.replace(/"/g, '""')}"`;
+  }
+  return s;
 }

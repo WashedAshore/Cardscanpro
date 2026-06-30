@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef } from "react";
+import { VerdictCard } from "@/components/VerdictCard";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Link } from "wouter";
@@ -205,6 +206,7 @@ export default function AnalyzerPage() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [fields, setFields] = useState<CardFields>(defaultFields);
   const [valuation, setValuation] = useState<any>(null);
+  const [analysisId, setAnalysisId] = useState<number | null>(null);
   const [cardDescription, setCardDescription] = useState<string>("");
   const [aiConfidence, setAiConfidence] = useState<string>("");
   const [showBreakdown, setShowBreakdown] = useState(true);
@@ -258,6 +260,7 @@ export default function AnalyzerPage() {
         baseCardValue: cd.baseCardValue || 1,
       });
       setValuation(data.valuation);
+      setAnalysisId(data.analysis?.id ?? null);
       setGradingRec(data.gradingRecommendation || null);
       setSellingRec(data.sellingRecommendation || null);
       setCardDescription(data.cardDescription || "");
@@ -879,6 +882,9 @@ export default function AnalyzerPage() {
           <div className="lg:col-span-4 space-y-4">
             {valuation ? (
               <>
+                {/* GRADE-OR-SELL VERDICT — the moat feature */}
+                <VerdictCard analysisId={analysisId} />
+
                 {/* FMV Hero */}
                 <Card className="border-primary/30 bg-primary/5">
                   <CardContent className="pt-5">

@@ -1,10 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "wouter";
 import { useUser } from "@/App";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
-import { TIERS, BTC_WALLET } from "@shared/schema";
-import type { TierKey, User } from "@shared/schema";
+import { TIERS, BTC_WALLET, TRIAL_PREVIEW_HOURS } from "@shared/schema";
+import type { TierKey } from "@shared/schema";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -27,9 +27,11 @@ import {
   CheckCircle2,
   Tag,
   CreditCard,
+  Sparkles,
+  Zap,
 } from "lucide-react";
 
-
+type PaymentMethod = "stripe" | "bitcoin";
 
 interface PromoResult {
   valid: boolean;
@@ -43,20 +45,32 @@ interface PromoResult {
 interface PaymentModalProps {
   isOpen: boolean;
   onClose: () => void;
-  tierKey: TierKey;
-  user: User | null;
-  onSuccess: (updatedUser: User) => void;
+  tierKey: Exclude<TierKey, "free">;
+  user: any;
+  onSuccess: (updatedUser: any) => void;
 }
 
 function PaymentModal({ isOpen, onClose, tierKey, user, onSuccess }: PaymentModalProps) {
   const tier = TIERS[tierKey];
   const { toast } = useToast();
 
+  const { data: stripeStatus } = useQuery<{ enabled: boolean }>({
+    queryKey: ["/api/stripe/status"],
+    queryFn: async () => (await apiRequest("GET", "/api/stripe/status")).json(),
+    staleTime: 60_000,
+  });
+
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("stripe");
   const [promoCode, setPromoCode] = useState("");
   const [promoResult, setPromoResult] = useState<PromoResult | null>(null);
   const [btcTxId, setBtcTxId] = useState("");
   const [btcAmount, setBtcAmount] = useState("");
   const [success, setSuccess] = useState(false);
+
+  // If Stripe disabled, force Bitcoin
+  useEffect(() => {
+    if (stripeStatus && !stripeStatus.enabled) setPaymentMethod("bitcoin");
+  }, [stripeStatus]);
 
   const finalPrice =
     promoResult?.finalPrice !== undefined ? promoResult.finalPrice : tier.price;
@@ -82,35 +96,50 @@ function PaymentModal({ isOpen, onClose, tierKey, user, onSuccess }: PaymentModa
       }
     },
     onError: (err: Error) => {
-      toast({
-        title: "Error validating promo",
-        description: err.message,
-        variant: "destructive",
-      });
+      toast({ title: "Error validating promo", description: err.message, variant: "destructive" });
     },
   });
 
-  const confirmPaymentMutation = useMutation({
+  const stripeCheckout = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/stripe/checkout", {
+        userId: user?.id,
+        tier: tierKey,
+        promoCode: promoResult?.valid ? promoCode.toUpperCase() : undefined,
+      });
+      return res.json();
+    },
+    onSuccess: (data: { url?: string; trial?: { granted: boolean; reason?: string; trialEndsAt?: string } }) => {
+      if (data.trial?.granted) {
+        toast({
+          title: `${TRIAL_PREVIEW_HOURS}h Dealer trial activated`,
+          description: "Full access starts now — you'll be billed only after checkout completes.",
+        });
+      }
+      if (data.url) window.location.href = data.url;
+    },
+    onError: (err: Error) => {
+      toast({ title: "Stripe checkout failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const btcSubmit = useMutation({
     mutationFn: async () => {
       const res = await apiRequest("POST", "/api/subscriptions", {
+        userId: user?.id,
         tier: tierKey,
         btcTxId: btcTxId.trim() || undefined,
         btcAmount: btcAmount.trim() || undefined,
         promoCode: promoResult?.valid ? promoCode.toUpperCase() : undefined,
-        usdAmount: String(finalPrice),
       });
       return res.json();
     },
-    onSuccess: (data: { subscription: unknown; user: User }) => {
+    onSuccess: (data: { subscription: unknown; user: any }) => {
       setSuccess(true);
       if (data.user) onSuccess(data.user);
     },
     onError: (err: Error) => {
-      toast({
-        title: "Payment submission failed",
-        description: err.message,
-        variant: "destructive",
-      });
+      toast({ title: "Payment submission failed", description: err.message, variant: "destructive" });
     },
   });
 
@@ -128,16 +157,22 @@ function PaymentModal({ isOpen, onClose, tierKey, user, onSuccess }: PaymentModa
     onClose();
   };
 
+  const stripeAvailable = stripeStatus?.enabled !== false;
+
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && handleClose()}>
       <DialogContent className="max-w-lg" data-testid="payment-modal">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-lg">
-            <Bitcoin className="w-5 h-5 text-amber-500" />
+            <Sparkles className="w-5 h-5 text-amber-500" />
             Subscribe to {tier.name}
           </DialogTitle>
           <DialogDescription>
-            Pay with Bitcoin — your subscription activates once payment is confirmed.
+            Choose how you'd like to pay. {stripeAvailable && (
+              <span className="text-amber-500 font-semibold">
+                {" "}24-hour Dealer-tier preview unlocks instantly with checkout.
+              </span>
+            )}
           </DialogDescription>
         </DialogHeader>
 
@@ -145,14 +180,12 @@ function PaymentModal({ isOpen, onClose, tierKey, user, onSuccess }: PaymentModa
           <div className="flex flex-col items-center gap-4 py-6 text-center">
             <CheckCircle2 className="w-12 h-12 text-green-500" />
             <div>
-              <p className="font-semibold text-base">Payment submitted!</p>
+              <p className="font-semibold text-base">Payment submitted</p>
               <p className="text-sm text-muted-foreground mt-1">
-                Your payment is pending confirmation. Your account will be upgraded shortly.
+                BTC payment recorded — your account upgrades once confirmed (usually within 24 hours).
               </p>
             </div>
-            <Button onClick={handleClose} data-testid="button-close-success">
-              Close
-            </Button>
+            <Button onClick={handleClose}>Close</Button>
           </div>
         ) : (
           <div className="space-y-5">
@@ -167,11 +200,45 @@ function PaymentModal({ isOpen, onClose, tierKey, user, onSuccess }: PaymentModa
               </div>
             </div>
 
+            {/* Payment method toggle */}
+            {stripeAvailable && (
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setPaymentMethod("stripe")}
+                  className={`flex flex-col items-center gap-1 rounded-lg border p-3 text-xs transition ${
+                    paymentMethod === "stripe"
+                      ? "border-primary bg-primary/5 ring-1 ring-primary"
+                      : "border-border hover:border-muted-foreground/50"
+                  }`}
+                  data-testid="button-pay-stripe"
+                >
+                  <CreditCard className="w-5 h-5" />
+                  <span className="font-semibold">Card (Stripe)</span>
+                  <span className="text-[10px] text-muted-foreground">Instant + 24h trial</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPaymentMethod("bitcoin")}
+                  className={`flex flex-col items-center gap-1 rounded-lg border p-3 text-xs transition ${
+                    paymentMethod === "bitcoin"
+                      ? "border-amber-500 bg-amber-50 dark:bg-amber-950/20 ring-1 ring-amber-500"
+                      : "border-border hover:border-muted-foreground/50"
+                  }`}
+                  data-testid="button-pay-bitcoin"
+                >
+                  <Bitcoin className="w-5 h-5 text-amber-500" />
+                  <span className="font-semibold">Bitcoin</span>
+                  <span className="text-[10px] text-muted-foreground">Manual confirm</span>
+                </button>
+              </div>
+            )}
+
             {/* Promo Code */}
             <div className="space-y-2">
               <Label className="text-sm flex items-center gap-1">
                 <Tag className="w-3.5 h-3.5" />
-                Promo Code
+                Promo Code (optional)
               </Label>
               <div className="flex gap-2">
                 <Input
@@ -179,19 +246,13 @@ function PaymentModal({ isOpen, onClose, tierKey, user, onSuccess }: PaymentModa
                   value={promoCode}
                   onChange={(e) => setPromoCode(e.target.value.toUpperCase())}
                   className="uppercase"
-                  data-testid="input-promo-code"
                 />
                 <Button
                   variant="outline"
                   onClick={() => validatePromoMutation.mutate()}
                   disabled={!promoCode.trim() || validatePromoMutation.isPending}
-                  data-testid="button-apply-promo"
                 >
-                  {validatePromoMutation.isPending ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : (
-                    "Apply"
-                  )}
+                  {validatePromoMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : "Apply"}
                 </Button>
               </div>
               {promoResult?.valid && (
@@ -202,7 +263,7 @@ function PaymentModal({ isOpen, onClose, tierKey, user, onSuccess }: PaymentModa
               )}
             </div>
 
-            {/* Price Summary */}
+            {/* Price Summary (when promo) */}
             {promoResult?.valid && (
               <div className="rounded-lg border p-3 space-y-1.5 text-sm">
                 <div className="flex justify-between text-muted-foreground">
@@ -220,77 +281,77 @@ function PaymentModal({ isOpen, onClose, tierKey, user, onSuccess }: PaymentModa
               </div>
             )}
 
-            {/* BTC Payment */}
-            <div className="space-y-3 rounded-lg border border-amber-200 dark:border-amber-800/50 bg-amber-50 dark:bg-amber-950/20 p-4">
-              <div className="flex items-center gap-2">
-                <Bitcoin className="w-4 h-4 text-amber-500" />
-                <p className="text-sm font-semibold">Bitcoin Payment</p>
-              </div>
-              <p className="text-xs text-muted-foreground">
-                Send <span className="font-bold text-foreground">${finalPrice.toFixed(2)}</span> in BTC to the address below:
-              </p>
-              <div className="flex items-center gap-2">
-                <code className="flex-1 text-xs bg-background rounded px-2 py-1.5 font-mono break-all border" data-testid="text-btc-address">
-                  {BTC_WALLET}
-                </code>
+            {/* Stripe path */}
+            {paymentMethod === "stripe" && stripeAvailable && (
+              <div className="space-y-3 rounded-lg border border-primary/30 bg-primary/5 p-4">
+                <div className="flex items-center gap-2 text-sm">
+                  <Zap className="w-4 h-4 text-amber-500" />
+                  <span className="font-semibold">{TRIAL_PREVIEW_HOURS}-hour Dealer-tier trial included</span>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Click below to start a Stripe Checkout. Your card is held but not charged until the trial ends.
+                  Cancel anytime in the next {TRIAL_PREVIEW_HOURS}h and you won't be billed.
+                </p>
                 <Button
-                  variant="outline"
-                  size="icon"
-                  onClick={handleCopyAddress}
-                  className="shrink-0"
-                  data-testid="button-copy-btc"
+                  className="w-full"
+                  onClick={() => stripeCheckout.mutate()}
+                  disabled={stripeCheckout.isPending}
+                  data-testid="button-stripe-checkout"
                 >
-                  <Copy className="w-4 h-4" />
+                  {stripeCheckout.isPending ? (
+                    <><Loader2 className="w-4 h-4 animate-spin mr-2" />Redirecting…</>
+                  ) : (
+                    <><CreditCard className="w-4 h-4 mr-2" />Continue with Stripe</>
+                  )}
                 </Button>
               </div>
-            </div>
+            )}
 
-            {/* Transaction Details */}
-            <div className="space-y-3">
-              <div className="space-y-1.5">
-                <Label className="text-sm" htmlFor="btc-tx-id">BTC Transaction ID</Label>
-                <Input
-                  id="btc-tx-id"
-                  placeholder="Paste your transaction hash here"
-                  value={btcTxId}
-                  onChange={(e) => setBtcTxId(e.target.value)}
-                  className="font-mono text-xs"
-                  data-testid="input-btc-tx-id"
-                />
+            {/* Bitcoin path */}
+            {paymentMethod === "bitcoin" && (
+              <div className="space-y-3 rounded-lg border border-amber-200 dark:border-amber-800/50 bg-amber-50 dark:bg-amber-950/20 p-4">
+                <div className="flex items-center gap-2">
+                  <Bitcoin className="w-4 h-4 text-amber-500" />
+                  <p className="text-sm font-semibold">Bitcoin Payment</p>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Send <span className="font-bold text-foreground">${finalPrice.toFixed(2)}</span> in BTC to:
+                </p>
+                <div className="flex items-center gap-2">
+                  <code className="flex-1 text-xs bg-background rounded px-2 py-1.5 font-mono break-all border">
+                    {BTC_WALLET}
+                  </code>
+                  <Button variant="outline" size="icon" onClick={handleCopyAddress} className="shrink-0">
+                    <Copy className="w-4 h-4" />
+                  </Button>
+                </div>
+                <div className="space-y-3">
+                  <div className="space-y-1.5">
+                    <Label className="text-sm">BTC Transaction ID</Label>
+                    <Input value={btcTxId} onChange={(e) => setBtcTxId(e.target.value)} className="font-mono text-xs" placeholder="Paste hash"/>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-sm">BTC Amount Sent</Label>
+                    <Input value={btcAmount} onChange={(e) => setBtcAmount(e.target.value)} placeholder="0.00012345"/>
+                  </div>
+                </div>
+                <Button
+                  className="w-full"
+                  onClick={() => btcSubmit.mutate()}
+                  disabled={btcSubmit.isPending}
+                  data-testid="button-confirm-btc"
+                >
+                  {btcSubmit.isPending ? (
+                    <><Loader2 className="w-4 h-4 animate-spin mr-2" />Submitting…</>
+                  ) : (
+                    <><Bitcoin className="w-4 h-4 mr-2" />Confirm BTC Payment</>
+                  )}
+                </Button>
+                <p className="text-xs text-center text-muted-foreground">
+                  Reviewed within 24 hours. No 24h trial preview on Bitcoin path.
+                </p>
               </div>
-              <div className="space-y-1.5">
-                <Label className="text-sm" htmlFor="btc-amount">BTC Amount Sent</Label>
-                <Input
-                  id="btc-amount"
-                  placeholder="e.g. 0.00012345"
-                  value={btcAmount}
-                  onChange={(e) => setBtcAmount(e.target.value)}
-                  data-testid="input-btc-amount"
-                />
-              </div>
-            </div>
-
-            <Button
-              className="w-full"
-              onClick={() => confirmPaymentMutation.mutate()}
-              disabled={confirmPaymentMutation.isPending}
-              data-testid="button-confirm-payment"
-            >
-              {confirmPaymentMutation.isPending ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin mr-2" />
-                  Submitting…
-                </>
-              ) : (
-                <>
-                  <CreditCard className="w-4 h-4 mr-2" />
-                  Confirm Payment
-                </>
-              )}
-            </Button>
-            <p className="text-xs text-center text-muted-foreground">
-              Payments are reviewed within 24 hours. You'll be upgraded automatically upon confirmation.
-            </p>
+            )}
           </div>
         )}
       </DialogContent>
@@ -298,29 +359,24 @@ function PaymentModal({ isOpen, onClose, tierKey, user, onSuccess }: PaymentModa
   );
 }
 
-const TIER_ORDER: TierKey[] = ["free", "pro", "elite", "enterprise"];
+const TIER_ORDER: TierKey[] = ["free", "pro", "elite", "dealer"];
 
 export default function PricingPage() {
   const { user, setUser } = useUser();
-  const onUserUpdate = (u: any) => setUser(u);
-  const [selectedTier, setSelectedTier] = useState<TierKey | null>(null);
+  const [selectedTier, setSelectedTier] = useState<Exclude<TierKey, "free"> | null>(null);
 
-  const handlePaymentSuccess = (updatedUser: User) => {
-    if (onUserUpdate) onUserUpdate(updatedUser);
+  const handlePaymentSuccess = (updatedUser: any) => {
+    if (setUser) setUser(updatedUser);
   };
 
   return (
     <div className="min-h-screen bg-background">
-      {/* Header */}
       <div className="bg-primary text-primary-foreground py-10 px-4 text-center">
         <div className="max-w-4xl mx-auto">
-          <h1 className="text-xl font-bold mb-2" data-testid="text-pricing-header">
-            Choose Your Plan
-          </h1>
+          <h1 className="text-xl font-bold mb-2">Choose Your Plan</h1>
           <p className="text-sm opacity-80">
-            Unlock more scans, folders, and advanced features with a paid plan.
-            <br />
-            All payments processed via Bitcoin — fast, private, and secure.
+            All paid plans include a {TRIAL_PREVIEW_HOURS}-hour Dealer-tier trial when you check out via Stripe.<br />
+            Pay with card (Stripe) for instant access, or Bitcoin for full privacy.
           </p>
           {!user && (
             <div className="mt-4 inline-flex items-center gap-2 rounded-lg bg-primary-foreground/10 border border-primary-foreground/20 px-4 py-2 text-sm">
@@ -328,21 +384,21 @@ export default function PricingPage() {
                 <Link href="/" className="underline underline-offset-2 hover:opacity-80">
                   Create an account
                 </Link>{" "}
-                to subscribe to a paid plan.
+                to subscribe.
               </span>
             </div>
           )}
         </div>
       </div>
 
-      {/* Tier Cards */}
       <div className="max-w-6xl mx-auto px-4 py-10">
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
           {TIER_ORDER.map((key) => {
             const tier = TIERS[key];
             const isCurrentPlan = user?.tier === key;
             const isPro = key === "pro";
-            const isEnterprise = key === "enterprise";
+            const isElite = key === "elite";
+            const isDealer = key === "dealer";
             const isFree = key === "free";
 
             return (
@@ -350,25 +406,23 @@ export default function PricingPage() {
                 key={key}
                 className={`relative flex flex-col ${
                   isPro
-                    ? "border-amber-400 dark:border-amber-500 ring-1 ring-amber-400/50 dark:ring-amber-500/50"
-                    : isEnterprise
-                    ? "border-primary dark:border-primary/80"
+                    ? "border-amber-400 ring-1 ring-amber-400/50"
+                    : isDealer
+                    ? "border-primary"
                     : ""
                 }`}
-                data-testid={`card-tier-${key}`}
               >
-                {/* Badges */}
                 {isPro && (
                   <div className="absolute -top-3 left-1/2 -translate-x-1/2">
-                    <Badge className="bg-amber-500 hover:bg-amber-500 text-amber-950 text-xs px-2.5 py-0.5 shadow-sm">
+                    <Badge className="bg-amber-500 hover:bg-amber-500 text-amber-950 text-xs px-2.5 py-0.5">
                       Most Popular
                     </Badge>
                   </div>
                 )}
-                {isEnterprise && (
+                {isDealer && (
                   <div className="absolute -top-3 left-1/2 -translate-x-1/2">
-                    <Badge className="bg-primary text-primary-foreground text-xs px-2.5 py-0.5 shadow-sm">
-                      Best Value
+                    <Badge className="bg-primary text-primary-foreground text-xs px-2.5 py-0.5">
+                      For Dealers
                     </Badge>
                   </div>
                 )}
@@ -386,14 +440,11 @@ export default function PricingPage() {
                     )}
                   </div>
                   <p className="text-xs text-muted-foreground mt-0.5">
-                    {tier.monthlyScans === -1
-                      ? "Unlimited scans"
-                      : `${tier.monthlyScans} scans/month`}
+                    {tier.monthlyScans === -1 ? "Unlimited scans" : `${tier.monthlyScans} scans/month`}
                   </p>
                 </CardHeader>
 
                 <CardContent className="flex-1 flex flex-col gap-4 pb-5">
-                  {/* Features */}
                   <ul className="space-y-1.5">
                     {tier.features.map((f, i) => (
                       <li key={i} className="flex items-start gap-2 text-xs">
@@ -403,7 +454,6 @@ export default function PricingPage() {
                     ))}
                   </ul>
 
-                  {/* Limitations */}
                   {tier.limitations.length > 0 && (
                     <ul className="space-y-1.5">
                       {tier.limitations.map((l, i) => (
@@ -415,45 +465,34 @@ export default function PricingPage() {
                     </ul>
                   )}
 
-                  {/* CTA */}
                   <div className="mt-auto pt-2">
                     {isFree ? (
                       isCurrentPlan ? (
-                        <Badge variant="outline" className="w-full justify-center py-1.5 text-xs" data-testid={`badge-current-plan-${key}`}>
+                        <Badge variant="outline" className="w-full justify-center py-1.5 text-xs">
                           Current Plan
                         </Badge>
                       ) : (
-                        <Badge variant="outline" className="w-full justify-center py-1.5 text-xs text-muted-foreground" data-testid={`badge-free-${key}`}>
+                        <Badge variant="outline" className="w-full justify-center py-1.5 text-xs text-muted-foreground">
                           Free
                         </Badge>
                       )
                     ) : isCurrentPlan ? (
-                      <Badge variant="outline" className="w-full justify-center py-1.5 text-xs border-green-500 text-green-600 dark:text-green-400" data-testid={`badge-active-${key}`}>
+                      <Badge variant="outline" className="w-full justify-center py-1.5 text-xs border-green-500 text-green-600">
                         <Check className="w-3 h-3 mr-1" />
                         Active Plan
                       </Badge>
                     ) : user ? (
                       <Button
                         className={`w-full text-xs h-8 ${
-                          isPro
-                            ? "bg-amber-500 hover:bg-amber-600 text-amber-950"
-                            : isEnterprise
-                            ? ""
-                            : ""
+                          isPro ? "bg-amber-500 hover:bg-amber-600 text-amber-950" : ""
                         }`}
-                        variant={isPro || isEnterprise ? "default" : "outline"}
-                        onClick={() => setSelectedTier(key)}
-                        data-testid={`button-subscribe-${key}`}
+                        variant={isPro || isDealer ? "default" : "outline"}
+                        onClick={() => setSelectedTier(key as Exclude<TierKey, "free">)}
                       >
                         Subscribe
                       </Button>
                     ) : (
-                      <Button
-                        variant="outline"
-                        className="w-full text-xs h-8"
-                        asChild
-                        data-testid={`button-login-to-subscribe-${key}`}
-                      >
+                      <Button variant="outline" className="w-full text-xs h-8" asChild>
                         <Link href="/">Log in to Subscribe</Link>
                       </Button>
                     )}
@@ -464,15 +503,13 @@ export default function PricingPage() {
           })}
         </div>
 
-        {/* Footer note */}
         <div className="text-center mt-10 text-xs text-muted-foreground space-y-1">
-          <p>All plans billed monthly via Bitcoin. No automatic renewals — manual payment each period.</p>
-          <p>Questions? Contact support for enterprise pricing and custom arrangements.</p>
+          <p>All paid plans billed monthly. Stripe (card) or Bitcoin. No automatic renewals on Bitcoin path.</p>
+          <p>Questions? Contact support for Dealer pricing and custom arrangements.</p>
         </div>
       </div>
 
-      {/* Payment Modal */}
-      {selectedTier && selectedTier !== "free" && (
+      {selectedTier && (
         <PaymentModal
           isOpen={!!selectedTier}
           onClose={() => setSelectedTier(null)}
