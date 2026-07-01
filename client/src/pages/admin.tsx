@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, setAdminUserId, getStoredAdminUserId } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -622,8 +622,9 @@ function SubscriptionsTab() {
 
 // ─── Main Admin Page ──────────────────────────────────────────────────────────
 
-// Global admin user ID for promo code creation
-let adminUserId: number = 1;
+// Persisted admin user id — mirrored through localStorage helpers so that
+// admin API calls auto-attach the X-Admin-User-Id header.
+let adminUserId: number = getStoredAdminUserId() ?? 0;
 export function getAdminUserId() { return adminUserId; }
 
 export default function AdminPage() {
@@ -633,6 +634,15 @@ export default function AdminPage() {
   const [needsBootstrap, setNeedsBootstrap] = useState(false);
   const [loginError, setLoginError] = useState("");
 
+  // Restore session from localStorage on mount
+  useEffect(() => {
+    const stored = getStoredAdminUserId();
+    if (stored) {
+      adminUserId = stored;
+      setIsLoggedIn(true);
+    }
+  }, []);
+
   // Login form
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -641,6 +651,7 @@ export default function AdminPage() {
   const [bootUsername, setBootUsername] = useState("");
   const [bootPassword, setBootPassword] = useState("");
   const [bootEmail, setBootEmail] = useState("");
+  const [bootToken, setBootToken] = useState("");
 
   const loginMutation = useMutation({
     mutationFn: async () => {
@@ -648,7 +659,10 @@ export default function AdminPage() {
       return res.json() as Promise<AdminSession>;
     },
     onSuccess: (data) => {
-      if (data?.user?.id) adminUserId = data.user.id;
+      if (data?.user?.id) {
+        adminUserId = data.user.id;
+        setAdminUserId(data.user.id);
+      }
       setIsLoggedIn(true);
       setLoginError("");
     },
@@ -663,6 +677,7 @@ export default function AdminPage() {
         username: bootUsername.trim(),
         password: bootPassword,
         email: bootEmail.trim() || undefined,
+        bootstrapToken: bootToken.trim(),
       });
       return res.json() as Promise<AdminSession>;
     },
@@ -672,6 +687,7 @@ export default function AdminPage() {
       setBootUsername("");
       setBootPassword("");
       setBootEmail("");
+      setBootToken("");
     },
     onError: (err: Error) => {
       toast({ title: "Bootstrap failed", description: err.message, variant: "destructive" });
@@ -722,10 +738,26 @@ export default function AdminPage() {
                 data-testid="input-boot-password"
               />
             </div>
+            <div className="space-y-1.5">
+              <Label className="text-sm">
+                Bootstrap Token{" "}
+                <span className="text-muted-foreground text-xs">(from ADMIN_BOOTSTRAP_TOKEN env var)</span>
+              </Label>
+              <Input
+                type="password"
+                placeholder="Server-side token"
+                value={bootToken}
+                onChange={(e) => setBootToken(e.target.value)}
+                data-testid="input-boot-token"
+              />
+              <p className="text-[10px] text-muted-foreground">
+                One-time setup token. Set ADMIN_BOOTSTRAP_TOKEN in Railway/server env, paste here. Bootstrap is locked once any admin exists.
+              </p>
+            </div>
             <Button
               className="w-full"
               onClick={() => bootstrapMutation.mutate()}
-              disabled={bootstrapMutation.isPending || !bootUsername.trim() || !bootPassword}
+              disabled={bootstrapMutation.isPending || !bootUsername.trim() || !bootPassword || !bootToken.trim()}
               data-testid="button-bootstrap-submit"
             >
               {bootstrapMutation.isPending ? (
@@ -828,7 +860,11 @@ export default function AdminPage() {
           variant="ghost"
           size="sm"
           className="text-primary-foreground/70 hover:text-primary-foreground hover:bg-primary-foreground/10 text-xs"
-          onClick={() => setIsLoggedIn(false)}
+          onClick={() => {
+            adminUserId = 0;
+            setAdminUserId(null);
+            setIsLoggedIn(false);
+          }}
           data-testid="button-admin-logout"
         >
           Sign Out

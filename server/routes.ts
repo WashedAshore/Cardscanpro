@@ -14,6 +14,38 @@ import {
   effectiveTier,
 } from "./stripeCheckout";
 
+// ============================================================
+// requireAdmin middleware
+// Verifies an X-Admin-User-Id header points at a real isAdmin=true user.
+// Stateless to match the rest of the app; can be swapped for a session
+// token system later without changing call sites.
+// ============================================================
+async function requireAdmin(
+  req: any,
+  res: any,
+  next: any,
+): Promise<void> {
+  try {
+    const headerId = req.headers["x-admin-user-id"];
+    const idStr = Array.isArray(headerId) ? headerId[0] : headerId;
+    const id = parseInt(idStr as string, 10);
+    if (!id) {
+      return res.status(401).json({ error: "Admin authentication required" });
+    }
+    const user = await storage.getUser(id);
+    if (!user) {
+      return res.status(401).json({ error: "Admin user not found" });
+    }
+    if (!user.isAdmin) {
+      return res.status(403).json({ error: "Administrator privileges required" });
+    }
+    req.adminUser = user;
+    next();
+  } catch (error: any) {
+    res.status(500).json({ error: error.message ?? "Admin auth check failed" });
+  }
+}
+
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 },
@@ -472,8 +504,8 @@ export async function registerRoutes(
     }
   });
 
-  // Confirm pending subscription (admin use)
-  app.post("/api/subscriptions/:id/confirm", async (req, res) => {
+  // Confirm pending subscription (admin use — protected by requireAdmin)
+  app.post("/api/subscriptions/:id/confirm", requireAdmin, async (req, res) => {
     try {
       const sub = await storage.getSubscription(parseInt(req.params.id));
       if (!sub) return res.status(404).json({ error: "Subscription not found" });
@@ -595,20 +627,31 @@ export async function registerRoutes(
   });
 
   // Bootstrap admin (first-time setup — only works if no admins exist)
+  // Additionally gated by ADMIN_BOOTSTRAP_TOKEN env var to prevent
+  // a stranger from racing the rightful operator on a fresh deploy.
   app.post("/api/admin/bootstrap", async (req, res) => {
     try {
-      const { username, password, email } = req.body;
+      const { username, password, email, bootstrapToken } = req.body;
       if (!username || !password) return res.status(400).json({ error: "Username and password required" });
-      
-      // Check if any admin exists
+
+      const expected = process.env.ADMIN_BOOTSTRAP_TOKEN;
+      if (!expected) {
+        return res.status(503).json({
+          error: "Admin bootstrap is disabled. Set ADMIN_BOOTSTRAP_TOKEN env var on the server first.",
+        });
+      }
+      if (!bootstrapToken || bootstrapToken !== expected) {
+        return res.status(403).json({ error: "Invalid bootstrap token" });
+      }
+
       const allUsers = await storage.getAllUsers();
-      const existingAdmin = allUsers.find(u => u.isAdmin);
+      const existingAdmin = allUsers.find((u) => u.isAdmin);
       if (existingAdmin) return res.status(403).json({ error: "Admin already exists. Use admin login." });
-      
+
       const hashed = await bcrypt.hash(password, 10);
       const user = await storage.createUser({ username, password: hashed, email: email || null });
       await storage.updateUser(user.id, { isAdmin: true, tier: "dealer", tierExpiresAt: null });
-      
+
       const updated = await storage.getUser(user.id);
       const { password: _, ...safeUser } = updated!;
       res.json({ user: safeUser, message: "Admin account created" });
@@ -617,13 +660,13 @@ export async function registerRoutes(
     }
   });
 
-  // Promo code CRUD (admin only)
-  app.get("/api/admin/promo-codes", async (req, res) => {
+  // Promo code CRUD (admin only — protected by requireAdmin)
+  app.get("/api/admin/promo-codes", requireAdmin, async (req, res) => {
     const codes = await storage.getAllPromoCodes();
     res.json(codes);
   });
 
-  app.post("/api/admin/promo-codes", async (req, res) => {
+  app.post("/api/admin/promo-codes", requireAdmin, async (req, res) => {
     try {
       const { code, description, discountType, discountValue, applicableTiers, maxUses, grantsTier, grantsDays, expiresAt, createdBy } = req.body;
       if (!code || !discountType || discountValue == null || !createdBy) {
@@ -655,7 +698,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/admin/promo-codes/:id", async (req, res) => {
+  app.patch("/api/admin/promo-codes/:id", requireAdmin, async (req, res) => {
     try {
       const updated = await storage.updatePromoCode(parseInt(req.params.id), req.body);
       if (!updated) return res.status(404).json({ error: "Promo code not found" });
@@ -665,20 +708,20 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/admin/promo-codes/:id", async (req, res) => {
+  app.delete("/api/admin/promo-codes/:id", requireAdmin, async (req, res) => {
     await storage.deletePromoCode(parseInt(req.params.id));
     res.json({ message: "Promo code deleted" });
   });
 
   // Admin: list all users
-  app.get("/api/admin/users", async (_req, res) => {
+  app.get("/api/admin/users", requireAdmin, async (_req, res) => {
     const allUsers = await storage.getAllUsers();
     const safe = allUsers.map(u => { const { password: _, ...s } = u; return s; });
     res.json(safe);
   });
 
   // Admin: update user tier manually
-  app.patch("/api/admin/users/:id", async (req, res) => {
+  app.patch("/api/admin/users/:id", requireAdmin, async (req, res) => {
     try {
       const updated = await storage.updateUser(parseInt(req.params.id), req.body);
       if (!updated) return res.status(404).json({ error: "User not found" });
@@ -690,7 +733,7 @@ export async function registerRoutes(
   });
 
   // Admin: all subscriptions
-  app.get("/api/admin/subscriptions", async (_req, res) => {
+  app.get("/api/admin/subscriptions", requireAdmin, async (_req, res) => {
     // Get all users' subscriptions
     const allUsers = await storage.getAllUsers();
     const allSubs: any[] = [];
