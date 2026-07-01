@@ -48,3 +48,8 @@ coverage/
 # Misc
 .cache/
 .tmp/
+
+# Sandbox-only helpers (do not commit)
+seed.cjs
+start-pg.cjs
+/tmp/
