@@ -20,7 +20,7 @@ import {
 } from "@shared/schema";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
-import { eq, desc, and, sql } from "drizzle-orm";
+import { eq, inArray, desc, and, sql } from "drizzle-orm";
 
 // Postgres connection — Railway provides DATABASE_URL automatically
 const databaseUrl = process.env.DATABASE_URL;
@@ -187,6 +187,7 @@ export interface IStorage {
   createAnalysis(analysis: InsertAnalysis): Promise<Analysis>;
   getAnalyses(userId?: number): Promise<Analysis[]>;
   getAnalysis(id: number): Promise<Analysis | undefined>;
+  getAnalysesByIds(ids: number[]): Promise<Analysis[]>;
   getAnalysesByFolder(folderId: number): Promise<Analysis[]>;
   moveAnalysisToFolder(analysisId: number, folderId: number | null): Promise<void>;
   getUserAnalysisCount(userId: number): Promise<number>;
@@ -277,6 +278,11 @@ export class DatabaseStorage implements IStorage {
 
   async getAnalysis(id: number): Promise<Analysis | undefined> {
     return first(await db.select().from(analyses).where(eq(analyses.id, id)));
+  }
+
+  async getAnalysesByIds(ids: number[]): Promise<Analysis[]> {
+    if (ids.length === 0) return [];
+    return db.select().from(analyses).where(inArray(analyses.id, ids));
   }
 
   async getAnalysesByFolder(folderId: number): Promise<Analysis[]> {

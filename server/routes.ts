@@ -918,8 +918,12 @@ export async function registerRoutes(
         return res.status(403).json({ error: "Bulk Arbitrage Scanner requires Elite or Dealer tier", requiredTier: "elite" });
       }
       const results: any[] = [];
-      for (const id of analysisIds.slice(0, 500)) {
-        const a = await storage.getAnalysis(id);
+      const batchIds = analysisIds.slice(0, 500);
+      const analysesBatch = await storage.getAnalysesByIds(batchIds);
+      const analysesMap = new Map(analysesBatch.map((a) => [a.id, a]));
+
+      for (const id of batchIds) {
+        const a = analysesMap.get(id);
         if (!a) continue;
         const v = await generateVerdict(a);
         results.push({
@@ -965,8 +969,12 @@ export async function registerRoutes(
       const svc = (service ?? "psa").toUpperCase();
       const rows: string[] = [];
       rows.push(["Service", "Year", "Brand/Set", "Player", "CardNumber", "DeclaredValue", "Notes"].join(","));
-      for (const id of analysisIds.slice(0, 1000)) {
-        const a = await storage.getAnalysis(id);
+      const batchIds = analysisIds.slice(0, 1000);
+      const analysesBatch = await storage.getAnalysesByIds(batchIds);
+      const analysesMap = new Map(analysesBatch.map((a) => [a.id, a]));
+
+      for (const id of batchIds) {
+        const a = analysesMap.get(id);
         if (!a) continue;
         rows.push(
           [
