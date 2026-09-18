@@ -204,6 +204,8 @@ export interface IStorage {
   createSubscription(sub: InsertSubscription): Promise<Subscription>;
   getSubscription(id: number): Promise<Subscription | undefined>;
   getUserSubscriptions(userId: number): Promise<Subscription[]>;
+  getAllSubscriptionsWithUsernames(): Promise<(Subscription & { username: string | null })[]>;
+
   getActiveSubscription(userId: number): Promise<Subscription | undefined>;
   updateSubscription(id: number, data: Partial<Subscription>): Promise<Subscription | undefined>;
   markStripeSessionConfirmed(
@@ -342,6 +344,22 @@ export class DatabaseStorage implements IStorage {
 
   async getUserSubscriptions(userId: number): Promise<Subscription[]> {
     return db.select().from(subscriptions).where(eq(subscriptions.userId, userId)).orderBy(desc(subscriptions.id));
+  }
+
+  async getAllSubscriptionsWithUsernames(): Promise<(Subscription & { username: string | null })[]> {
+    const results = await db
+      .select({
+        subscription: subscriptions,
+        username: users.username,
+      })
+      .from(subscriptions)
+      .leftJoin(users, eq(subscriptions.userId, users.id))
+      .orderBy(desc(users.id), desc(subscriptions.id));
+
+    return results.map(row => ({
+      ...row.subscription,
+      username: row.username
+    }));
   }
 
   async getActiveSubscription(userId: number): Promise<Subscription | undefined> {

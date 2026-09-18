@@ -735,12 +735,7 @@ export async function registerRoutes(
   // Admin: all subscriptions
   app.get("/api/admin/subscriptions", requireAdmin, async (_req, res) => {
     // Get all users' subscriptions
-    const allUsers = await storage.getAllUsers();
-    const allSubs: any[] = [];
-    for (const u of allUsers) {
-      const subs = await storage.getUserSubscriptions(u.id);
-      allSubs.push(...subs.map(s => ({ ...s, username: u.username })));
-    }
+    const allSubs = await storage.getAllSubscriptionsWithUsernames();
     res.json(allSubs);
   });
 
