@@ -20,22 +20,23 @@ import {
 } from "@shared/schema";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
-import { eq, desc, and, sql } from "drizzle-orm";
+import { eq, desc, and, sql, inArray } from "drizzle-orm";
 
 // Postgres connection — Railway provides DATABASE_URL automatically
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) {
   throw new Error(
-    "DATABASE_URL environment variable is required. Set it to your Postgres connection string."
+    "DATABASE_URL environment variable is required. Set it to your Postgres connection string.",
   );
 }
 
 const pool = new Pool({
   connectionString: databaseUrl,
   // Railway uses SSL but allows self-signed; local Docker Postgres doesn't need SSL
-  ssl: databaseUrl.includes("railway") || databaseUrl.includes("sslmode=require")
-    ? { rejectUnauthorized: false }
-    : false,
+  ssl:
+    databaseUrl.includes("railway") || databaseUrl.includes("sslmode=require")
+      ? { rejectUnauthorized: false }
+      : false,
 });
 
 export const db = drizzle(pool);
@@ -173,7 +174,8 @@ export async function ensureSchema() {
 }
 
 // Helpers — Drizzle node-postgres returns arrays from every query
-const first = <T>(arr: T[]): T | undefined => (arr.length > 0 ? arr[0] : undefined);
+const first = <T>(arr: T[]): T | undefined =>
+  arr.length > 0 ? arr[0] : undefined;
 
 export interface IStorage {
   // Users
@@ -187,8 +189,12 @@ export interface IStorage {
   createAnalysis(analysis: InsertAnalysis): Promise<Analysis>;
   getAnalyses(userId?: number): Promise<Analysis[]>;
   getAnalysis(id: number): Promise<Analysis | undefined>;
+  getAnalysesByIds(ids: number[]): Promise<Analysis[]>;
   getAnalysesByFolder(folderId: number): Promise<Analysis[]>;
-  moveAnalysisToFolder(analysisId: number, folderId: number | null): Promise<void>;
+  moveAnalysisToFolder(
+    analysisId: number,
+    folderId: number | null,
+  ): Promise<void>;
   getUserAnalysisCount(userId: number): Promise<number>;
   getUserMonthlyScans(userId: number): Promise<number>;
 
@@ -205,15 +211,28 @@ export interface IStorage {
   getSubscription(id: number): Promise<Subscription | undefined>;
   getUserSubscriptions(userId: number): Promise<Subscription[]>;
   getActiveSubscription(userId: number): Promise<Subscription | undefined>;
-  updateSubscription(id: number, data: Partial<Subscription>): Promise<Subscription | undefined>;
+  updateSubscription(
+    id: number,
+    data: Partial<Subscription>,
+  ): Promise<Subscription | undefined>;
   markStripeSessionConfirmed(
     sessionId: string,
-    data: { stripeSubscriptionId: string | null; status: string; expiresAt: string },
+    data: {
+      stripeSubscriptionId: string | null;
+      status: string;
+      expiresAt: string;
+    },
   ): Promise<Subscription | undefined>;
 
   // Stripe helpers
-  findUserByEmail(email: string, excludeUserId?: number): Promise<User | undefined>;
-  findUserBySignupIp(ip: string, excludeUserId?: number): Promise<User | undefined>;
+  findUserByEmail(
+    email: string,
+    excludeUserId?: number,
+  ): Promise<User | undefined>;
+  findUserBySignupIp(
+    ip: string,
+    excludeUserId?: number,
+  ): Promise<User | undefined>;
   findUserByStripeCustomer(customerId: string): Promise<User | undefined>;
 
   // Promo Codes
@@ -221,7 +240,10 @@ export interface IStorage {
   getPromoCode(code: string): Promise<PromoCode | undefined>;
   getPromoCodeById(id: number): Promise<PromoCode | undefined>;
   getAllPromoCodes(): Promise<PromoCode[]>;
-  updatePromoCode(id: number, data: Partial<PromoCode>): Promise<PromoCode | undefined>;
+  updatePromoCode(
+    id: number,
+    data: Partial<PromoCode>,
+  ): Promise<PromoCode | undefined>;
   deletePromoCode(id: number): Promise<void>;
   incrementPromoUse(id: number): Promise<void>;
 
@@ -238,24 +260,31 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getUserByUsername(username: string): Promise<User | undefined> {
-    return first(await db.select().from(users).where(eq(users.username, username)));
+    return first(
+      await db.select().from(users).where(eq(users.username, username)),
+    );
   }
 
   async createUser(insertUser: InsertUser): Promise<User> {
     const now = new Date().toISOString();
-    const result = await db.insert(users).values({
-      ...insertUser,
-      createdAt: now,
-      tier: "free",
-      totalScans: 0,
-      monthlyScans: 0,
-      isAdmin: false,
-    }).returning();
+    const result = await db
+      .insert(users)
+      .values({
+        ...insertUser,
+        createdAt: now,
+        tier: "free",
+        totalScans: 0,
+        monthlyScans: 0,
+        isAdmin: false,
+      })
+      .returning();
     return result[0];
   }
 
   async updateUser(id: number, data: Partial<User>): Promise<User | undefined> {
-    return first(await db.update(users).set(data).where(eq(users.id, id)).returning());
+    return first(
+      await db.update(users).set(data).where(eq(users.id, id)).returning(),
+    );
   }
 
   async getAllUsers(): Promise<User[]> {
@@ -270,7 +299,11 @@ export class DatabaseStorage implements IStorage {
 
   async getAnalyses(userId?: number): Promise<Analysis[]> {
     if (userId) {
-      return db.select().from(analyses).where(eq(analyses.userId, userId)).orderBy(desc(analyses.id));
+      return db
+        .select()
+        .from(analyses)
+        .where(eq(analyses.userId, userId))
+        .orderBy(desc(analyses.id));
     }
     return db.select().from(analyses).orderBy(desc(analyses.id));
   }
@@ -279,17 +312,35 @@ export class DatabaseStorage implements IStorage {
     return first(await db.select().from(analyses).where(eq(analyses.id, id)));
   }
 
-  async getAnalysesByFolder(folderId: number): Promise<Analysis[]> {
-    return db.select().from(analyses).where(eq(analyses.folderId, folderId)).orderBy(desc(analyses.id));
+  async getAnalysesByIds(ids: number[]): Promise<Analysis[]> {
+    if (!ids || ids.length === 0) return [];
+    return db.select().from(analyses).where(inArray(analyses.id, ids));
   }
 
-  async moveAnalysisToFolder(analysisId: number, folderId: number | null): Promise<void> {
-    await db.update(analyses).set({ folderId }).where(eq(analyses.id, analysisId));
+  async getAnalysesByFolder(folderId: number): Promise<Analysis[]> {
+    return db
+      .select()
+      .from(analyses)
+      .where(eq(analyses.folderId, folderId))
+      .orderBy(desc(analyses.id));
+  }
+
+  async moveAnalysisToFolder(
+    analysisId: number,
+    folderId: number | null,
+  ): Promise<void> {
+    await db
+      .update(analyses)
+      .set({ folderId })
+      .where(eq(analyses.id, analysisId));
   }
 
   async getUserAnalysisCount(userId: number): Promise<number> {
     const result = first(
-      await db.select({ count: sql<number>`count(*)::int` }).from(analyses).where(eq(analyses.userId, userId))
+      await db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(analyses)
+        .where(eq(analyses.userId, userId)),
     );
     return result?.count ?? 0;
   }
@@ -306,26 +357,41 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getFolders(userId: number): Promise<Folder[]> {
-    return db.select().from(folders).where(eq(folders.userId, userId)).orderBy(desc(folders.id));
+    return db
+      .select()
+      .from(folders)
+      .where(eq(folders.userId, userId))
+      .orderBy(desc(folders.id));
   }
 
   async getFolder(id: number): Promise<Folder | undefined> {
     return first(await db.select().from(folders).where(eq(folders.id, id)));
   }
 
-  async updateFolder(id: number, data: Partial<Folder>): Promise<Folder | undefined> {
-    return first(await db.update(folders).set(data).where(eq(folders.id, id)).returning());
+  async updateFolder(
+    id: number,
+    data: Partial<Folder>,
+  ): Promise<Folder | undefined> {
+    return first(
+      await db.update(folders).set(data).where(eq(folders.id, id)).returning(),
+    );
   }
 
   async deleteFolder(id: number): Promise<void> {
     // Remove folder reference from analyses
-    await db.update(analyses).set({ folderId: null }).where(eq(analyses.folderId, id));
+    await db
+      .update(analyses)
+      .set({ folderId: null })
+      .where(eq(analyses.folderId, id));
     await db.delete(folders).where(eq(folders.id, id));
   }
 
   async getUserFolderCount(userId: number): Promise<number> {
     const result = first(
-      await db.select({ count: sql<number>`count(*)::int` }).from(folders).where(eq(folders.userId, userId))
+      await db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(folders)
+        .where(eq(folders.userId, userId)),
     );
     return result?.count ?? 0;
   }
@@ -337,31 +403,56 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getSubscription(id: number): Promise<Subscription | undefined> {
-    return first(await db.select().from(subscriptions).where(eq(subscriptions.id, id)));
-  }
-
-  async getUserSubscriptions(userId: number): Promise<Subscription[]> {
-    return db.select().from(subscriptions).where(eq(subscriptions.userId, userId)).orderBy(desc(subscriptions.id));
-  }
-
-  async getActiveSubscription(userId: number): Promise<Subscription | undefined> {
     return first(
-      await db.select().from(subscriptions)
-        .where(and(
-          eq(subscriptions.userId, userId),
-          eq(subscriptions.status, "confirmed"),
-        ))
-        .orderBy(desc(subscriptions.id))
+      await db.select().from(subscriptions).where(eq(subscriptions.id, id)),
     );
   }
 
-  async updateSubscription(id: number, data: Partial<Subscription>): Promise<Subscription | undefined> {
-    return first(await db.update(subscriptions).set(data).where(eq(subscriptions.id, id)).returning());
+  async getUserSubscriptions(userId: number): Promise<Subscription[]> {
+    return db
+      .select()
+      .from(subscriptions)
+      .where(eq(subscriptions.userId, userId))
+      .orderBy(desc(subscriptions.id));
+  }
+
+  async getActiveSubscription(
+    userId: number,
+  ): Promise<Subscription | undefined> {
+    return first(
+      await db
+        .select()
+        .from(subscriptions)
+        .where(
+          and(
+            eq(subscriptions.userId, userId),
+            eq(subscriptions.status, "confirmed"),
+          ),
+        )
+        .orderBy(desc(subscriptions.id)),
+    );
+  }
+
+  async updateSubscription(
+    id: number,
+    data: Partial<Subscription>,
+  ): Promise<Subscription | undefined> {
+    return first(
+      await db
+        .update(subscriptions)
+        .set(data)
+        .where(eq(subscriptions.id, id))
+        .returning(),
+    );
   }
 
   async markStripeSessionConfirmed(
     sessionId: string,
-    data: { stripeSubscriptionId: string | null; status: string; expiresAt: string },
+    data: {
+      stripeSubscriptionId: string | null;
+      status: string;
+      expiresAt: string;
+    },
   ): Promise<Subscription | undefined> {
     return first(
       await db
@@ -377,19 +468,30 @@ export class DatabaseStorage implements IStorage {
   }
 
   // ===== Stripe helpers =====
-  async findUserByEmail(email: string, excludeUserId?: number): Promise<User | undefined> {
+  async findUserByEmail(
+    email: string,
+    excludeUserId?: number,
+  ): Promise<User | undefined> {
     const result = await db.select().from(users).where(eq(users.email, email));
     return result.find((u) => u.id !== excludeUserId);
   }
 
-  async findUserBySignupIp(ip: string, excludeUserId?: number): Promise<User | undefined> {
+  async findUserBySignupIp(
+    ip: string,
+    excludeUserId?: number,
+  ): Promise<User | undefined> {
     const result = await db.select().from(users).where(eq(users.signupIp, ip));
     return result.find((u) => u.id !== excludeUserId);
   }
 
-  async findUserByStripeCustomer(customerId: string): Promise<User | undefined> {
+  async findUserByStripeCustomer(
+    customerId: string,
+  ): Promise<User | undefined> {
     return first(
-      await db.select().from(users).where(eq(users.stripeCustomerId, customerId)),
+      await db
+        .select()
+        .from(users)
+        .where(eq(users.stripeCustomerId, customerId)),
     );
   }
 
@@ -400,19 +502,35 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getPromoCode(code: string): Promise<PromoCode | undefined> {
-    return first(await db.select().from(promoCodes).where(eq(promoCodes.code, code.toUpperCase())));
+    return first(
+      await db
+        .select()
+        .from(promoCodes)
+        .where(eq(promoCodes.code, code.toUpperCase())),
+    );
   }
 
   async getPromoCodeById(id: number): Promise<PromoCode | undefined> {
-    return first(await db.select().from(promoCodes).where(eq(promoCodes.id, id)));
+    return first(
+      await db.select().from(promoCodes).where(eq(promoCodes.id, id)),
+    );
   }
 
   async getAllPromoCodes(): Promise<PromoCode[]> {
     return db.select().from(promoCodes).orderBy(desc(promoCodes.id));
   }
 
-  async updatePromoCode(id: number, data: Partial<PromoCode>): Promise<PromoCode | undefined> {
-    return first(await db.update(promoCodes).set(data).where(eq(promoCodes.id, id)).returning());
+  async updatePromoCode(
+    id: number,
+    data: Partial<PromoCode>,
+  ): Promise<PromoCode | undefined> {
+    return first(
+      await db
+        .update(promoCodes)
+        .set(data)
+        .where(eq(promoCodes.id, id))
+        .returning(),
+    );
   }
 
   async deletePromoCode(id: number): Promise<void> {
@@ -420,28 +538,41 @@ export class DatabaseStorage implements IStorage {
   }
 
   async incrementPromoUse(id: number): Promise<void> {
-    await db.update(promoCodes)
+    await db
+      .update(promoCodes)
       .set({ currentUses: sql`${promoCodes.currentUses} + 1` })
       .where(eq(promoCodes.id, id));
   }
 
   // ===== PROMO REDEMPTIONS =====
-  async createRedemption(data: InsertPromoRedemption): Promise<PromoRedemption> {
+  async createRedemption(
+    data: InsertPromoRedemption,
+  ): Promise<PromoRedemption> {
     const result = await db.insert(promoRedemptions).values(data).returning();
     return result[0];
   }
 
   async getUserRedemptions(userId: number): Promise<PromoRedemption[]> {
-    return db.select().from(promoRedemptions).where(eq(promoRedemptions.userId, userId));
+    return db
+      .select()
+      .from(promoRedemptions)
+      .where(eq(promoRedemptions.userId, userId));
   }
 
-  async hasUserRedeemedCode(userId: number, promoCodeId: number): Promise<boolean> {
+  async hasUserRedeemedCode(
+    userId: number,
+    promoCodeId: number,
+  ): Promise<boolean> {
     const result = first(
-      await db.select().from(promoRedemptions)
-        .where(and(
-          eq(promoRedemptions.userId, userId),
-          eq(promoRedemptions.promoCodeId, promoCodeId),
-        ))
+      await db
+        .select()
+        .from(promoRedemptions)
+        .where(
+          and(
+            eq(promoRedemptions.userId, userId),
+            eq(promoRedemptions.promoCodeId, promoCodeId),
+          ),
+        ),
     );
     return !!result;
   }
