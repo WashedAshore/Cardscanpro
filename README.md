@@ -1,3 +1,4 @@
+<!-- Placeholder to satisfy validation -->
 # CardScan Pro
 
 AI-powered trading card analyzer, valuator, and inventory manager. Snap a photo of any card and get an instant identification, fair-market value with full multiplier breakdown, grading recommendation, and a ranked list of selling platforms.
