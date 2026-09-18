@@ -187,7 +187,7 @@ Tasks:
 Return ONLY a strict JSON object with exactly these keys: probabilities, grade_multipliers, sell_window (string or null), reasoning (string). No markdown, no commentary.`;
 }
 
-function extractJson(text: string): any {
+function extractJson(text: string): unknown {
   try {
     const match = text.match(/\{[\s\S]*\}/);
     if (!match) return null;
