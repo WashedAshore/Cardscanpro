@@ -1258,13 +1258,23 @@ function calculateValuation(input: CardInput): ValuationResult {
   const rookie = getRookiePremium(input.isRookie);
   const jersey = getJerseyMatchBonus(input.serialNumber, input.playerJersey);
 
+  const baseMultipliers = [
+    { factor: "Serial / Print Run", data: serial },
+    { factor: "Grade", data: grade },
+    { factor: "Auto Type", data: auto },
+    { factor: "Player Tier", data: playerTier },
+    { factor: "Brand / Set", data: brand },
+    { factor: "Sport", data: sport },
+  ];
+
   breakdown.push(
-    { factor: "Serial / Print Run", multiplier: serial.mid, low: serial.low, high: serial.high, description: serial.desc },
-    { factor: "Grade", multiplier: grade.mid, low: grade.low, high: grade.high, description: grade.desc },
-    { factor: "Auto Type", multiplier: auto.mid, low: auto.low, high: auto.high, description: auto.desc },
-    { factor: "Player Tier", multiplier: playerTier.mid, low: playerTier.low, high: playerTier.high, description: playerTier.desc },
-    { factor: "Brand / Set", multiplier: brand.mid, low: brand.low, high: brand.high, description: brand.desc },
-    { factor: "Sport", multiplier: sport.mid, low: sport.low, high: sport.high, description: sport.desc }
+    ...baseMultipliers.map(m => ({
+      factor: m.factor,
+      multiplier: m.data.mid,
+      low: m.data.low,
+      high: m.data.high,
+      description: m.data.desc,
+    }))
   );
 
   if (input.isRookie) {
