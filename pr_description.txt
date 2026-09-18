@@ -1,0 +1,6 @@
+🧹 Use Anthropic SDK types for payload mapping in verdict generation
+
+🎯 **What:** Replaced the `any[]` array definition for Anthropic content blocks with the specific `Anthropic.Messages.ContentBlockParam[]` type, and updated the message content filter to use the `Anthropic.Messages.TextBlock` type guard.
+💡 **Why:** Ensures correct payload structure, providing robust compile-time guarantees, preventing bugs in payload formation, and improving overall maintainability and readability by using explicitly defined library types.
+✅ **Verification:** Verified by running `npm run check` (TypeScript compiler check) and ensuring type correctness.
+✨ **Result:** Payload mapping uses SDK types correctly, removing 'any' bypasses and enforcing structure safely.
