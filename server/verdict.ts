@@ -89,7 +89,7 @@ export async function generateVerdict(
 
   let aiResponse: any = null;
   try {
-    const content: any[] = [{ type: "text", text: userPrompt }];
+    const content: Anthropic.Messages.ContentBlockParam[] = [{ type: "text", text: userPrompt }];
     if (imageBase64) {
       content.unshift({
         type: "image",
@@ -102,8 +102,8 @@ export async function generateVerdict(
       messages: [{ role: "user", content }],
     });
     const text = msg.content
-      .filter((c: any) => c.type === "text")
-      .map((c: any) => c.text)
+      .filter((c): c is Anthropic.Messages.TextBlock => c.type === "text")
+      .map((c) => c.text)
       .join("\n");
     aiResponse = extractJson(text);
   } catch (err) {
