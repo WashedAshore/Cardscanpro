@@ -41,8 +41,8 @@ async function requireAdmin(
     }
     req.adminUser = user;
     next();
-  } catch (error: any) {
-    res.status(500).json({ error: error.message ?? "Admin auth check failed" });
+  } catch (error: unknown) {
+    res.status(500).json({ error: error instanceof Error ? error.message : "Admin auth check failed" });
   }
 }
 
@@ -285,11 +285,11 @@ export async function registerRoutes(
         sellingRecommendation: sellingRec,
         cardDescription: cardData.cardDescription || "",
       });
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Analysis error:", error);
       res.status(500).json({
         error: "Failed to analyze card",
-        details: error.message,
+        details: (error instanceof Error ? error.message : "Unknown error"),
       });
     }
   });
@@ -321,8 +321,8 @@ export async function registerRoutes(
         fmv: valuation.estimatedFmv,
       });
       res.json({ valuation, gradingRecommendation: gradingRec, sellingRecommendation: sellingRec });
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
+    } catch (error: unknown) {
+      res.status(500).json({ error: (error instanceof Error ? error.message : "Unknown error") });
     }
   });
 
@@ -358,8 +358,8 @@ export async function registerRoutes(
       
       const { password: _, ...safeUser } = user;
       res.json({ user: safeUser });
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
+    } catch (error: unknown) {
+      res.status(500).json({ error: (error instanceof Error ? error.message : "Unknown error") });
     }
   });
 
@@ -396,8 +396,8 @@ export async function registerRoutes(
       
       const { password: _, ...safeUser } = user;
       res.json({ user: safeUser });
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
+    } catch (error: unknown) {
+      res.status(500).json({ error: (error instanceof Error ? error.message : "Unknown error") });
     }
   });
 
@@ -499,8 +499,8 @@ export async function registerRoutes(
       const updatedUser = await storage.getUser(userId);
       const { password: _, ...safeUser } = updatedUser!;
       res.json({ subscription: sub, user: safeUser });
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
+    } catch (error: unknown) {
+      res.status(500).json({ error: (error instanceof Error ? error.message : "Unknown error") });
     }
   });
 
@@ -517,8 +517,8 @@ export async function registerRoutes(
       });
       
       res.json({ message: "Subscription confirmed" });
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
+    } catch (error: unknown) {
+      res.status(500).json({ error: (error instanceof Error ? error.message : "Unknown error") });
     }
   });
 
@@ -560,8 +560,8 @@ export async function registerRoutes(
       });
       
       res.json(folder);
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
+    } catch (error: unknown) {
+      res.status(500).json({ error: (error instanceof Error ? error.message : "Unknown error") });
     }
   });
 
@@ -578,8 +578,8 @@ export async function registerRoutes(
       });
       if (!updated) return res.status(404).json({ error: "Folder not found" });
       res.json(updated);
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
+    } catch (error: unknown) {
+      res.status(500).json({ error: (error instanceof Error ? error.message : "Unknown error") });
     }
   });
 
@@ -594,8 +594,8 @@ export async function registerRoutes(
       const { folderId } = req.body;
       await storage.moveAnalysisToFolder(parseInt(req.params.id), folderId || null);
       res.json({ message: "Moved" });
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
+    } catch (error: unknown) {
+      res.status(500).json({ error: (error instanceof Error ? error.message : "Unknown error") });
     }
   });
 
@@ -621,8 +621,8 @@ export async function registerRoutes(
       
       const { password: _, ...safeUser } = user;
       res.json({ user: safeUser });
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
+    } catch (error: unknown) {
+      res.status(500).json({ error: (error instanceof Error ? error.message : "Unknown error") });
     }
   });
 
@@ -655,8 +655,8 @@ export async function registerRoutes(
       const updated = await storage.getUser(user.id);
       const { password: _, ...safeUser } = updated!;
       res.json({ user: safeUser, message: "Admin account created" });
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
+    } catch (error: unknown) {
+      res.status(500).json({ error: (error instanceof Error ? error.message : "Unknown error") });
     }
   });
 
@@ -693,8 +693,8 @@ export async function registerRoutes(
       });
       
       res.json(promo);
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
+    } catch (error: unknown) {
+      res.status(500).json({ error: (error instanceof Error ? error.message : "Unknown error") });
     }
   });
 
@@ -703,8 +703,8 @@ export async function registerRoutes(
       const updated = await storage.updatePromoCode(parseInt(req.params.id), req.body);
       if (!updated) return res.status(404).json({ error: "Promo code not found" });
       res.json(updated);
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
+    } catch (error: unknown) {
+      res.status(500).json({ error: (error instanceof Error ? error.message : "Unknown error") });
     }
   });
 
@@ -727,8 +727,8 @@ export async function registerRoutes(
       if (!updated) return res.status(404).json({ error: "User not found" });
       const { password: _, ...safeUser } = updated;
       res.json(safeUser);
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
+    } catch (error: unknown) {
+      res.status(500).json({ error: (error instanceof Error ? error.message : "Unknown error") });
     }
   });
 
@@ -773,8 +773,8 @@ export async function registerRoutes(
         grantsTier: promo.grantsTier,
         grantsDays: promo.grantsDays,
       });
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
+    } catch (error: unknown) {
+      res.status(500).json({ error: (error instanceof Error ? error.message : "Unknown error") });
     }
   });
 
@@ -802,8 +802,8 @@ export async function registerRoutes(
       });
       
       res.json({ ok: true, scansUsed: (user.monthlyScans || 0) + 1, limit });
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
+    } catch (error: unknown) {
+      res.status(500).json({ error: (error instanceof Error ? error.message : "Unknown error") });
     }
   });
 
@@ -824,8 +824,8 @@ export async function registerRoutes(
       }
       const verdict = await generateVerdict(analysis);
       res.json({ verdict: gateVerdict(verdict, tier), tier });
-    } catch (error: any) {
-      res.status(500).json({ error: error.message ?? "Failed to generate verdict" });
+    } catch (error: unknown) {
+      res.status(500).json({ error: error instanceof Error ? error.message : "Failed to generate verdict" });
     }
   });
 
@@ -867,9 +867,9 @@ export async function registerRoutes(
         ? await startTrialPreview({ user: refreshedUser, clientIp: req.ip })
         : { granted: false };
       res.json({ url: session.url, sessionId: session.sessionId, trial });
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Stripe checkout failed:", error);
-      res.status(500).json({ error: error.message ?? "Stripe checkout failed" });
+      res.status(500).json({ error: error instanceof Error ? error.message : "Stripe checkout failed" });
     }
   });
 
@@ -877,9 +877,9 @@ export async function registerRoutes(
     try {
       const result = await handleWebhook(req);
       res.json(result);
-    } catch (error: any) {
-      console.error("Stripe webhook error:", error.message);
-      res.status(400).json({ error: error.message });
+    } catch (error: unknown) {
+      console.error("Stripe webhook error:", (error instanceof Error ? error.message : "Unknown error"));
+      res.status(400).json({ error: (error instanceof Error ? error.message : "Unknown error") });
     }
   });
 
@@ -940,8 +940,8 @@ export async function registerRoutes(
         recommendedCount: results.filter((r) => r.recommended).length,
         results,
       });
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
+    } catch (error: unknown) {
+      res.status(500).json({ error: (error instanceof Error ? error.message : "Unknown error") });
     }
   });
 
@@ -986,8 +986,8 @@ export async function registerRoutes(
         `attachment; filename="submission-${svc.toLowerCase()}-${Date.now()}.csv"`,
       );
       res.send(rows.join("\n"));
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
+    } catch (error: unknown) {
+      res.status(500).json({ error: (error instanceof Error ? error.message : "Unknown error") });
     }
   });
 
