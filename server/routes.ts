@@ -1,4 +1,5 @@
 import type { Express } from "express";
+import { log } from "./index";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import multer from "multer";
@@ -286,7 +287,7 @@ export async function registerRoutes(
         cardDescription: cardData.cardDescription || "",
       });
     } catch (error: any) {
-      console.error("Analysis error:", error);
+      log(`Analysis error: ${error.message || error}`, "routes");
       res.status(500).json({
         error: "Failed to analyze card",
         details: error.message,
@@ -868,7 +869,7 @@ export async function registerRoutes(
         : { granted: false };
       res.json({ url: session.url, sessionId: session.sessionId, trial });
     } catch (error: any) {
-      console.error("Stripe checkout failed:", error);
+      log(`Stripe checkout failed: ${error.message || error}`, "routes");
       res.status(500).json({ error: error.message ?? "Stripe checkout failed" });
     }
   });
@@ -878,7 +879,7 @@ export async function registerRoutes(
       const result = await handleWebhook(req);
       res.json(result);
     } catch (error: any) {
-      console.error("Stripe webhook error:", error.message);
+      log(`Stripe webhook error: ${error.message}`, "routes");
       res.status(400).json({ error: error.message });
     }
   });
